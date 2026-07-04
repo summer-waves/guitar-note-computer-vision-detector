@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.task
+.streamlit/
+data/raw_recordings/*.wav
+data/vision_samples/finger_placement*.jpeg
+data/vision_samples/finger_placement*.png
