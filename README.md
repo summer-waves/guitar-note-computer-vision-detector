@@ -210,7 +210,37 @@ since that requires the fuller 2D homography in `fretboard_calibration.py`
 rather than the simpler 1D nut/scale fit `detect_frets.py` currently
 produces.
 
+### 8. Posture tracking (`src/vision/pose_tracking.py`, `src/vision/posture_analysis.py`)
 
+An extension beyond finger/note verification: tracking body posture while
+playing, using MediaPipe's Pose Landmarker (same pattern as hand tracking,
+applied to the whole upper body -- nose, ears, shoulders, hips).
+
+`posture_analysis.py` computes descriptive angles from those landmarks:
+- **Craniovertebral angle (CVA)** -- a real metric from ergonomics/physical
+  therapy research, used as a general reference point for forward head
+  posture. Deliberately implemented with no fixed "correct" verdict, and
+  documented with the caveat that researchers don't agree on one universal
+  cutoff (commonly cited figures range from ~48-52 degrees).
+- **Shoulder tilt** -- simple levelness check.
+- **Guitar neck angle** -- purely descriptive (correct angle is a matter of
+  playing style/technique, not a single right answer).
+
+**Validated via:** landmark detection confirmed accurate against two real
+photos (all 7 tracked points visually verified to land correctly on ears,
+shoulders, hips, nose).
+
+**Known limitation -- important:** the CVA metric specifically requires a
+true side-profile photo to be clinically meaningful (it measures forward/
+backward head position, which only shows up from the side). Both real
+test photos taken so far were front-facing/frontal-ish, so while the
+landmark detection and angle math both run correctly, **no valid CVA
+reading has been produced yet.** Getting one genuine side-profile photo
+is needed before this metric can be trusted -- this is flagged directly
+in the code's docstring as well, so the limitation travels with the code,
+not just this document.
+
+---
 
 ## Known limitations (honest accounting)
 
@@ -221,6 +251,10 @@ produces.
 - **No real accuracy number yet for finger-to-fret detection** — the one
   test run used a non-fretting hand position (see above); pipeline is ready,
   just needs the right input photo.
+- **No valid CVA (posture) reading yet** — requires a true side-profile
+  photo, which hasn't been captured; landmark detection and angle math are
+  both confirmed working, just not yet fed the right input (same pattern
+  as the finger-to-fret gap above).
 - **Pitch accuracy ceiling:** even after fixing the octave-doubling bug,
   real recordings show ~20-30 cents average deviation from equal temperament
   — likely a mix of genuine tuning drift and the inherent precision limit of
@@ -240,6 +274,9 @@ produces.
    photo is missing).
 2. Extend the combined tab to determine **string**, not just fret, by
    wiring in the full 2D homography from `fretboard_calibration.py`.
+3. Capture one genuine side-profile photo to get the first valid CVA
+   posture reading (same "pipeline ready, right input still needed"
+   situation as item 1).
 3. Extend `src/reference/diff.py` scoring to real, deliberately-played test
    recordings with a known ground-truth reference (e.g. a narrated
    fret-by-fret recording), rather than only synthetic references.
