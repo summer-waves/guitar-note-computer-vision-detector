@@ -1,15 +1,3 @@
-"""
-src/app/streamlit_app.py
-
-STATUS: Updated with live camera/audio capture and combined finger-to-fret
-detection. The camera/audio widgets below have NOT been tested by Claude
-(no camera/mic in the dev sandbox) -- test these locally and report back
-if anything misbehaves.
-
-Run with:
-    pip install streamlit
-    streamlit run src/app/streamlit_app.py
-"""
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -17,16 +5,36 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import streamlit as st
 import tempfile
 import subprocess
-import cv2
 import numpy as np
 from scipy.io import wavfile
 
 from src.audio.pitch_detect import analyze_file, collapse_to_notes, summarize_notes
-from src.vision.detect_frets import calibrate_from_neck_photo, estimate_fret_from_row
-from src.vision.hand_tracking import detect_hand_landmarks, draw_landmarks, FINGERTIP_IDS
+
+# cv2/mediapipe depend on system-level graphics libraries (libGL, libGLESv2,
+# libEGL, libgthread) that Streamlit Cloud's base image has occasionally been
+# missing (a known, currently-active platform issue as of mid-2026 -- see
+# README "Known limitations"). Import defensively so a missing system
+# library disables only the vision tabs, not the entire app.
+VISION_AVAILABLE = True
+VISION_IMPORT_ERROR = None
+try:
+    import cv2
+    from src.vision.detect_frets import calibrate_from_neck_photo, estimate_fret_from_row
+    from src.vision.hand_tracking import detect_hand_landmarks, draw_landmarks, FINGERTIP_IDS
+except Exception as e:
+    VISION_AVAILABLE = False
+    VISION_IMPORT_ERROR = str(e)
 
 st.set_page_config(page_title="Guitar Note Verifier", layout="wide")
 st.title("Guitar Note Verifier")
+
+if not VISION_AVAILABLE:
+    st.warning(
+        "Vision features (Fretboard Calibration, Hand Tracking, Finger-to-Fret) are "
+        "temporarily unavailable due to a missing system library on the server "
+        f"(`{VISION_IMPORT_ERROR}`). This is a known Streamlit Cloud platform issue, "
+        "not a bug in this app. Audio Pitch Detection below is unaffected."
+    )
 
 
 def get_audio_path(uploaded_or_recorded):
@@ -101,47 +109,53 @@ with tab_audio:
 with tab_neck:
     st.header("Fretboard Calibration")
 
-    neck_source = st.radio("Input method", ["Upload file", "Use camera"], key="neck_source", horizontal=True)
-    if neck_source == "Upload file":
-        neck_photo = st.file_uploader("Upload a cropped neck photo", type=["jpg", "jpeg", "png"], key="neck")
+    if not VISION_AVAILABLE:
+        st.error("This tab needs computer vision libraries that aren't currently available on the server. See the warning above.")
     else:
-        neck_photo = st.camera_input("Capture the neck", key="neck_cam")
-
-    if neck_photo is not None:
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp.write(neck_photo.getvalue())
-            tmp_path = tmp.name
-
-        result = calibrate_from_neck_photo(tmp_path)
-        if result is None:
-            st.warning("Not enough fret markers detected. Try a clearer, closer photo of the neck.")
+        neck_source = st.radio("Input method", ["Upload file", "Use camera"], key="neck_source", horizontal=True)
+        if neck_source == "Upload file":
+            neck_photo = st.file_uploader("Upload a cropped neck photo", type=["jpg", "jpeg", "png"], key="neck")
         else:
-            st.success(f"Calibration fit quality (R^2): {result['r_squared']:.5f}")
-            st.json({"row_nut": result["row_nut"], "scale_px": result["scale_px"],
-                     "fret_to_row": result["fret_to_row"]})
+            neck_photo = st.camera_input("Capture the neck", key="neck_cam")
+
+        if neck_photo is not None:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(neck_photo.getvalue())
+                tmp_path = tmp.name
+
+            result = calibrate_from_neck_photo(tmp_path)
+            if result is None:
+                st.warning("Not enough fret markers detected. Try a clearer, closer photo of the neck.")
+            else:
+                st.success(f"Calibration fit quality (R^2): {result['r_squared']:.5f}")
+                st.json({"row_nut": result["row_nut"], "scale_px": result["scale_px"],
+                         "fret_to_row": result["fret_to_row"]})
 
 # ---------------------------------------------------------------------------
 with tab_hand:
     st.header("Hand Landmark Tracking")
 
-    hand_source = st.radio("Input method", ["Upload file", "Use camera"], key="hand_source", horizontal=True)
-    if hand_source == "Upload file":
-        hand_photo = st.file_uploader("Upload a hand/fretting photo", type=["jpg", "jpeg", "png"], key="hand")
+    if not VISION_AVAILABLE:
+        st.error("This tab needs computer vision libraries that aren't currently available on the server. See the warning above.")
     else:
-        hand_photo = st.camera_input("Capture your hand", key="hand_cam")
+        hand_source = st.radio("Input method", ["Upload file", "Use camera"], key="hand_source", horizontal=True)
+        if hand_source == "Upload file":
+            hand_photo = st.file_uploader("Upload a hand/fretting photo", type=["jpg", "jpeg", "png"], key="hand")
+        else:
+            hand_photo = st.camera_input("Capture your hand", key="hand_cam")
 
-    if hand_photo is not None:
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp.write(hand_photo.getvalue())
-            tmp_path = tmp.name
+        if hand_photo is not None:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(hand_photo.getvalue())
+                tmp_path = tmp.name
 
-        hands_pixels, img_bgr = detect_hand_landmarks(tmp_path)
-        st.write(f"Detected {len(hands_pixels)} hand(s)")
+            hands_pixels, img_bgr = detect_hand_landmarks(tmp_path)
+            st.write(f"Detected {len(hands_pixels)} hand(s)")
 
-        if hands_pixels:
-            vis = draw_landmarks(img_bgr, hands_pixels)
-            vis_rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
-            st.image(vis_rgb, caption="Detected hand landmarks")
+            if hands_pixels:
+                vis = draw_landmarks(img_bgr, hands_pixels)
+                vis_rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
+                st.image(vis_rgb, caption="Detected hand landmarks")
 
 # ---------------------------------------------------------------------------
 with tab_combined:
@@ -155,53 +169,56 @@ with tab_combined:
         "homography (see fretboard_calibration.py) rather than this simpler fit."
     )
 
-    st.subheader("Step 1: Calibration photo (clean neck)")
-    calib_source = st.radio("Input method", ["Upload file", "Use camera"], key="calib_source", horizontal=True)
-    if calib_source == "Upload file":
-        calib_photo = st.file_uploader("Upload a clean neck photo", type=["jpg", "jpeg", "png"], key="calib_upload")
+    if not VISION_AVAILABLE:
+        st.error("This tab needs computer vision libraries that aren't currently available on the server. See the warning above.")
     else:
-        calib_photo = st.camera_input("Capture the clean neck", key="calib_cam")
-
-    calibration = None
-    if calib_photo is not None:
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp.write(calib_photo.getvalue())
-            calib_path = tmp.name
-        calibration = calibrate_from_neck_photo(calib_path)
-        if calibration is None:
-            st.warning("Not enough fret markers detected in the calibration photo.")
+        st.subheader("Step 1: Calibration photo (clean neck)")
+        calib_source = st.radio("Input method", ["Upload file", "Use camera"], key="calib_source", horizontal=True)
+        if calib_source == "Upload file":
+            calib_photo = st.file_uploader("Upload a clean neck photo", type=["jpg", "jpeg", "png"], key="calib_upload")
         else:
-            st.success(f"Calibrated (R^2={calibration['r_squared']:.4f}): "
-                       f"row_nut={calibration['row_nut']:.1f}, scale_px={calibration['scale_px']:.1f}")
+            calib_photo = st.camera_input("Capture the clean neck", key="calib_cam")
 
-    st.subheader("Step 2: Fretting photo (hand on neck)")
-    finger_source = st.radio("Input method", ["Upload file", "Use camera"], key="finger_source", horizontal=True)
-    if finger_source == "Upload file":
-        finger_photo = st.file_uploader("Upload a fretting photo", type=["jpg", "jpeg", "png"], key="finger_upload")
-    else:
-        finger_photo = st.camera_input("Capture your fretting hand", key="finger_cam")
+        calibration = None
+        if calib_photo is not None:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(calib_photo.getvalue())
+                calib_path = tmp.name
+            calibration = calibrate_from_neck_photo(calib_path)
+            if calibration is None:
+                st.warning("Not enough fret markers detected in the calibration photo.")
+            else:
+                st.success(f"Calibrated (R^2={calibration['r_squared']:.4f}): "
+                           f"row_nut={calibration['row_nut']:.1f}, scale_px={calibration['scale_px']:.1f}")
 
-    if finger_photo is not None and calibration is not None:
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp.write(finger_photo.getvalue())
-            finger_path = tmp.name
-
-        hands_pixels, img_bgr = detect_hand_landmarks(finger_path)
-
-        if not hands_pixels:
-            st.warning("No hand detected in the fretting photo.")
+        st.subheader("Step 2: Fretting photo (hand on neck)")
+        finger_source = st.radio("Input method", ["Upload file", "Use camera"], key="finger_source", horizontal=True)
+        if finger_source == "Upload file":
+            finger_photo = st.file_uploader("Upload a fretting photo", type=["jpg", "jpeg", "png"], key="finger_upload")
         else:
-            vis = draw_landmarks(img_bgr, hands_pixels)
-            vis_rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
-            st.image(vis_rgb, caption="Detected hand + estimated frets below")
+            finger_photo = st.camera_input("Capture your fretting hand", key="finger_cam")
 
-            st.subheader("Estimated fret per fingertip")
-            pixels = hands_pixels[0]
-            rows = []
-            for name, idx in FINGERTIP_IDS.items():
-                x, y = pixels[idx]
-                fret = estimate_fret_from_row(y, calibration["row_nut"], calibration["scale_px"])
-                rows.append({"Finger": name, "Pixel Y": round(y, 1), "Estimated Fret": fret})
-            st.dataframe(rows)
-    elif finger_photo is not None and calibration is None:
-        st.info("Complete Step 1 (calibration) first, or Step 1's photo didn't calibrate successfully.")
+        if finger_photo is not None and calibration is not None:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(finger_photo.getvalue())
+                finger_path = tmp.name
+
+            hands_pixels, img_bgr = detect_hand_landmarks(finger_path)
+
+            if not hands_pixels:
+                st.warning("No hand detected in the fretting photo.")
+            else:
+                vis = draw_landmarks(img_bgr, hands_pixels)
+                vis_rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
+                st.image(vis_rgb, caption="Detected hand + estimated frets below")
+
+                st.subheader("Estimated fret per fingertip")
+                pixels = hands_pixels[0]
+                rows = []
+                for name, idx in FINGERTIP_IDS.items():
+                    x, y = pixels[idx]
+                    fret = estimate_fret_from_row(y, calibration["row_nut"], calibration["scale_px"])
+                    rows.append({"Finger": name, "Pixel Y": round(y, 1), "Estimated Fret": fret})
+                st.dataframe(rows)
+        elif finger_photo is not None and calibration is None:
+            st.info("Complete Step 1 (calibration) first, or Step 1's photo didn't calibrate successfully.")
